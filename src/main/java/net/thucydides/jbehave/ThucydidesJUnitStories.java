@@ -5,16 +5,20 @@ import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.google.common.util.concurrent.MoreExecutors;
 import net.thucydides.core.ThucydidesSystemProperty;
 import net.thucydides.core.guice.Injectors;
 import net.thucydides.core.util.EnvironmentVariables;
+import net.thucydides.core.webdriver.ThucydidesWebDriverSupport;
 import net.thucydides.jbehave.runners.ThucydidesReportingRunner;
 import org.codehaus.plexus.util.StringUtils;
+import org.jbehave.core.ConfigurableEmbedder;
 import org.jbehave.core.configuration.Configuration;
+import org.jbehave.core.embedder.Embedder;
 import org.jbehave.core.io.StoryFinder;
-import org.jbehave.core.junit.JUnitStories;
 import org.jbehave.core.reporters.Format;
 import org.jbehave.core.steps.InjectableStepsFactory;
+import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.IOException;
@@ -24,6 +28,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
+import static net.thucydides.jbehave.ThucydidesJBehaveSystemProperties.IGNORE_FAILURES_IN_STORIES;
+import static net.thucydides.jbehave.ThucydidesJBehaveSystemProperties.METAFILTER;
+import static net.thucydides.jbehave.ThucydidesJBehaveSystemProperties.STORY_TIMEOUT_IN_SECS;
 import static org.jbehave.core.reporters.Format.CONSOLE;
 import static org.jbehave.core.reporters.Format.HTML;
 import static org.jbehave.core.reporters.Format.XML;
@@ -34,36 +41,47 @@ import static org.jbehave.core.reporters.Format.XML;
  * You can redefine these constraints as follows:
  */
 @RunWith(ThucydidesReportingRunner.class)
-public class ThucydidesJUnitStories extends JUnitStories {
+public class ThucydidesJUnitStories extends ConfigurableEmbedder {
 
     public static final String DEFAULT_STORY_NAME =  "**/*.story";
     public static final List<String> DEFAULT_GIVEN_STORY_PREFIX = ImmutableList.of("Given","Precondition");
+	public static final String SKIP_FILTER = "-skip";
+	public static final String IGNORE_FILTER = "-ignore";
+	public static final String DEFAULT_METAFILTER = SKIP_FILTER + " " + IGNORE_FILTER;
 
-    private net.thucydides.core.webdriver.Configuration systemConfiguration;
-    private EnvironmentVariables environmentVariables;
+	private net.thucydides.core.webdriver.Configuration systemConfiguration;
+	private EnvironmentVariables environmentVariables;
 
-    private String storyFolder = "";
+	private List<String> stories;
+	private String storyFolder = "";
     private String storyNamePattern = DEFAULT_STORY_NAME;
 
+	private Embedder embedder;
     private Configuration configuration;
-    private List<Format> formats = Arrays.asList(CONSOLE, HTML, XML);
+	private InjectableStepsFactory injectableStepsFactory;
+	private List<Format> formats = Arrays.asList(CONSOLE, HTML, XML);
 
-    public ThucydidesJUnitStories() {}
+	public ThucydidesJUnitStories() {}
 
     protected ThucydidesJUnitStories(EnvironmentVariables environmentVariables) {
-        this.environmentVariables = environmentVariables.copy();
+        this.setEnvironmentVariables(environmentVariables.copy());
     }
 
     protected ThucydidesJUnitStories(net.thucydides.core.webdriver.Configuration configuration) {
         this.setSystemConfiguration(configuration);
     }
 
-    protected EnvironmentVariables getEnvironmentVariables() {
-        if (environmentVariables == null) {
-            environmentVariables = Injectors.getInjector().getInstance(EnvironmentVariables.class).copy();
-        }
-        return environmentVariables;
-    }
+	@Override
+	@Test
+	public void run() {
+		try {
+			getConfiguredEmbedder().runStoriesAsPaths(storyPaths());
+		} finally {
+			if (getSystemConfiguration().getUseUniqueBrowser()) {
+				ThucydidesWebDriverSupport.closeAllDrivers();
+			}
+		}
+	}
 
     @Override
     public Configuration configuration() {
@@ -79,8 +97,25 @@ public class ThucydidesJUnitStories extends JUnitStories {
 
     @Override
     public InjectableStepsFactory stepsFactory() {
-        return ThucydidesStepFactory.withStepsFromPackage(getRootPackage(), configuration()).andClassLoader(getClassLoader());
+	    if (injectableStepsFactory == null) {
+            injectableStepsFactory = new ThucydidesStepFactory(configuration(), getRootPackage(), getClassLoader());
+	    }
+	    return injectableStepsFactory;
     }
+
+	public Embedder getConfiguredEmbedder() {
+		if (embedder == null) {
+			embedder = configuredEmbedder();
+			embedder.embedderControls().doIgnoreFailureInView(true);
+			embedder.embedderControls().doIgnoreFailureInStories(getIgnoreFailuresInStories());
+			embedder.embedderControls().useStoryTimeoutInSecs(getStoryTimeoutInSecs());
+			embedder.useExecutorService(MoreExecutors.sameThreadExecutor());
+			if (metaFiltersAreDefined()) {
+				embedder.useMetaFilters(getMetaFilters());
+			}
+		}
+		return embedder;
+	}
 
     /**
      * The class loader used to obtain the JBehave and Step implementation classes.
@@ -92,20 +127,22 @@ public class ThucydidesJUnitStories extends JUnitStories {
     }
 
     public List<String> storyPaths() {
-        Set<String> storyPaths = Sets.newHashSet();
-
-        List<String> pathExpressions = getStoryPathExpressions();
-        StoryFinder storyFinder = new StoryFinder();
-        for(String pathExpression : pathExpressions) {
-            if (absolutePath(pathExpression)) {
-                storyPaths.add(pathExpression);
-            }
-            for(URL classpathRootUrl : allClasspathRoots()) {
-                storyPaths.addAll(storyFinder.findPaths(classpathRootUrl, pathExpression, ""));
-            }
-            storyPaths = pruneGivenStoriesFrom(storyPaths);
-        }
-        return Lists.newArrayList(storyPaths);
+	    if (stories == null) {
+	        Set<String> storyPaths = Sets.newHashSet();
+	        List<String> pathExpressions = getStoryPathExpressions();
+	        StoryFinder storyFinder = new StoryFinder();
+	        for(String pathExpression : pathExpressions) {
+	            if (absolutePath(pathExpression)) {
+	                storyPaths.add(pathExpression);
+	            }
+	            for(URL classpathRootUrl : allClasspathRoots()) {
+	                storyPaths.addAll(storyFinder.findPaths(classpathRootUrl, pathExpression, ""));
+	            }
+	            storyPaths = pruneGivenStoriesFrom(storyPaths);
+	        }
+	        stories = Lists.newArrayList(storyPaths);
+	    }
+        return stories;
     }
 
     private Set<String> pruneGivenStoriesFrom(Set<String> storyPaths) {
@@ -120,8 +157,8 @@ public class ThucydidesJUnitStories extends JUnitStories {
     }
 
     class FilterBuilder {
-
         private final List<String> paths;
+
         public FilterBuilder(List<String> paths) {
             this.paths = paths;
         }
@@ -145,6 +182,7 @@ public class ThucydidesJUnitStories extends JUnitStories {
             return path.toLowerCase().startsWith(skippedPrecondition.toLowerCase());
         }
     }
+
     private FilterBuilder removeFrom(List<String> filteredPaths) {
         return new FilterBuilder(filteredPaths);
     }
@@ -200,7 +238,6 @@ public class ThucydidesJUnitStories extends JUnitStories {
 
     }
 
-
     /**
      * Use this to override the default ThucydidesWebdriverIntegration configuration - for testing purposes only.
      */
@@ -226,6 +263,44 @@ public class ThucydidesJUnitStories extends JUnitStories {
     protected void useUniqueSession() {
         getSystemConfiguration().setIfUndefined(ThucydidesSystemProperty.UNIQUE_BROWSER.getPropertyName(), "true");
     }
+
+	protected EnvironmentVariables getEnvironmentVariables() {
+		if (environmentVariables == null) {
+			environmentVariables = Injectors.getInjector().getInstance(EnvironmentVariables.class).copy();
+		}
+		return environmentVariables;
+	}
+
+	//////////////////
+
+	private boolean metaFiltersAreDefined() {
+		String metaFilters = getMetafilterSetting();
+		return !StringUtils.isEmpty(metaFilters);
+	}
+
+	private String getMetafilterSetting() {
+		String metaFilters = getEnvironmentVariables().getProperty(METAFILTER.getName(), DEFAULT_METAFILTER);
+		if (!metaFilters.contains(SKIP_FILTER)) {
+			metaFilters = metaFilters + SKIP_FILTER;
+		}
+		if (!metaFilters.contains(IGNORE_FILTER)) {
+			metaFilters = metaFilters + IGNORE_FILTER;
+		}
+		return metaFilters;
+	}
+
+	protected boolean getIgnoreFailuresInStories() {
+		return getEnvironmentVariables().getPropertyAsBoolean(IGNORE_FAILURES_IN_STORIES.getName(), true);
+	}
+
+	protected int getStoryTimeoutInSecs() {
+		return getEnvironmentVariables().getPropertyAsInteger(STORY_TIMEOUT_IN_SECS.getName(), 300);
+	}
+
+	protected List<String> getMetaFilters() {
+		String metaFilters = getMetafilterSetting();
+		return Lists.newArrayList(Splitter.on(",").trimResults().split(metaFilters));
+	}
 
     public ThucydidesConfigurationBuilder runThucydides() {
         return new ThucydidesConfigurationBuilder(this);
@@ -287,4 +362,5 @@ public class ThucydidesJUnitStories extends JUnitStories {
                     Integer.toString(value));
         }
     }
+
 }
