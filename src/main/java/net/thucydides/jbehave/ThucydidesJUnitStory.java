@@ -1,12 +1,10 @@
 package net.thucydides.jbehave;
 
-import com.google.common.base.Splitter;
 import com.google.common.collect.Lists;
 import net.thucydides.core.util.EnvironmentVariables;
 import net.thucydides.core.util.Inflector;
 import org.codehaus.plexus.util.StringUtils;
 
-import java.io.File;
 import java.util.List;
 
 import static org.apache.commons.lang3.StringUtils.join;
@@ -16,11 +14,12 @@ import static org.apache.commons.lang3.StringUtils.join;
  * For example, a class called MyStory.java would run a JBehave story called "my_story.story" or MyStory.story.
  */
 public class ThucydidesJUnitStory extends ThucydidesJUnitStories {
+
     public ThucydidesJUnitStory() {
         findStoriesCalled(storynamesDerivedFromClassName());
     }
 
-    public ThucydidesJUnitStory(EnvironmentVariables environmentVariables) {
+    protected ThucydidesJUnitStory(EnvironmentVariables environmentVariables) {
         super(environmentVariables);
         findStoriesCalled(storynamesDerivedFromClassName());
     }
@@ -30,13 +29,7 @@ public class ThucydidesJUnitStory extends ThucydidesJUnitStories {
         findStoriesCalled(storynamesDerivedFromClassName());
     }
 
-    @Override
-    public void run() throws Throwable {
-        super.run();
-    }
-
     protected String storynamesDerivedFromClassName() {
-
         List<String> storyNames = getStoryNameCandidatesFrom(startingWithUpperCase(simpleClassName()),
                                                              startingWithLowerCase(simpleClassName()),
                                                              underscoredTestName());
