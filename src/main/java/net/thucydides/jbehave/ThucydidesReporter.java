@@ -4,7 +4,6 @@ import ch.lambdaj.function.convert.Converter;
 import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
 import com.google.common.base.Splitter;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import net.thucydides.core.Thucydides;
@@ -557,12 +556,10 @@ public class ThucydidesReporter implements StoryReporter {
     public void givenStories(List<String> strings) {
     }
 
-    List<Map<String, String>> exampleData;
     int exampleCount = 0;
 
     public void beforeExamples(List<String> steps, ExamplesTable table) {
         exampleCount = 0;
-        exampleData = ImmutableList.copyOf(table.getRows());
         StepEventBus.getEventBus().useExamplesFrom(thucydidesTableFrom(table));
     }
 
@@ -581,11 +578,10 @@ public class ThucydidesReporter implements StoryReporter {
             finishExample();
         }
         restartPeriodically();
-        startExample();
+        startExample(tableRow);
     }
 
-    private void startExample() {
-        Map<String, String> data = exampleData.get(exampleCount - 1);
+    private void startExample(Map<String, String> data) {
         StepEventBus.getEventBus().exampleStarted(data);
     }
 
